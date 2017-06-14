@@ -9,6 +9,9 @@ import win32api
 import win32process
 
 
+MAX_TARGETS = 4
+
+
 def main():
     import sys
 
@@ -28,7 +31,7 @@ class App:
     window = attr.ib(init=False, repr=False)
     map_sprite = attr.ib(init=False, repr=False)
     player_sprite = attr.ib(init=False, repr=False)
-    target_sprite = attr.ib(init=False, repr=False)
+    target_sprites = attr.ib(init=False, repr=False)
 
     def __attrs_post_init__(self):
         self.window = pyglet.window.Window(768, 768)
@@ -42,8 +45,12 @@ class App:
         pin_image.anchor_y = 0
         self.player_sprite = pyglet.sprite.Sprite(pin_image)
         self.player_sprite.scale = 0.1
-        self.target_sprite = pyglet.sprite.Sprite(pin_image)
-        self.target_sprite.scale = 0.1
+
+        self.target_sprites = []
+        for i in range(MAX_TARGETS):
+            target_sprite = pyglet.sprite.Sprite(pin_image)
+            target_sprite.scale = 0.1
+            self.target_sprites.append(target_sprite)
 
         self.window.event(self.on_draw)
         pyglet.clock.schedule(self.on_update)
@@ -51,7 +58,8 @@ class App:
     def on_draw(self):
         self.map_sprite.draw()
         self.player_sprite.draw()
-        self.target_sprite.draw()
+        for target_sprite in self.target_sprites:
+            target_sprite.draw()
 
     def on_update(self, dt):
         max_coordinate = 1 << 22
@@ -59,13 +67,12 @@ class App:
         self.player_sprite.x = real_x * self.map_sprite.width / max_coordinate
         self.player_sprite.y = self.map_sprite.height - real_y * self.map_sprite.height / max_coordinate
 
-        real_x, real_y = get_target_coordinates(self.process_handle)
-        if real_x is None or real_y is None:
-            self.target_sprite.visible = False
-        else:
-            self.target_sprite.visible = True
-            self.target_sprite.x = real_x * self.map_sprite.width / 2 ** 22
-            self.target_sprite.y = self.map_sprite.height - real_y * self.map_sprite.height / 2 ** 22
+        for target_sprite in self.target_sprites:
+            target_sprite.visible = False
+        for target_sprite, (real_x, real_y) in zip(self.target_sprites, get_target_coordinates(self.process_handle)):
+            target_sprite.visible = True
+            target_sprite.x = real_x * self.map_sprite.width / max_coordinate
+            target_sprite.y = self.map_sprite.height - real_y * self.map_sprite.height / max_coordinate
 
 
 @contextmanager
@@ -86,15 +93,18 @@ def get_coordinates(process_handle):
 
 def get_target_coordinates(process_handle):
     base_address = ('gta2.exe', 0x282f40)
-    is_target_visible_offsets = (0x12cc, 0x1290, 0x10)
-    x_pos_offsets = (0x12cc, 0x1290, 0x14)
-    y_pos_offsets = (0x12cc, 0x1290, 0x18)
-    (is_target_visible,) = unpack('<I', read_process_bytes(process_handle, base_address, *is_target_visible_offsets))
-    if not is_target_visible:
-        return None, None
-    (x_pos,) = unpack('<I', read_process_bytes(process_handle, base_address, *x_pos_offsets))
-    (y_pos,) = unpack('<I', read_process_bytes(process_handle, base_address, *y_pos_offsets))
-    return x_pos, y_pos
+    for i in range(MAX_TARGETS):
+        target_offset = i * 124
+        is_target_visible_offsets = (0x12cc, 0x1290, target_offset + 0x10)
+        x_pos_offsets = (0x12cc, 0x1290, target_offset + 0x14)
+        y_pos_offsets = (0x12cc, 0x1290, target_offset + 0x18)
+        (is_target_visible,) = unpack('<I', read_process_bytes(process_handle, base_address,
+                                      *is_target_visible_offsets))
+        if not is_target_visible:
+            continue
+        (x_pos,) = unpack('<I', read_process_bytes(process_handle, base_address, *x_pos_offsets))
+        (y_pos,) = unpack('<I', read_process_bytes(process_handle, base_address, *y_pos_offsets))
+        yield x_pos, y_pos
 
 
 def read_process_bytes(process_handle, address, *offsets, fmt='I'):
@@ -106,7 +116,7 @@ def read_process_bytes(process_handle, address, *offsets, fmt='I'):
 
     bs, _ = read_process_memory(process_handle, address, buffer, size)
     for offset in offsets:
-        (address,) = unpack('<' + fmt, bs)
+        (address,) = unpack('<I', bs)
         address += offset
         bs, _ = read_process_memory(process_handle, address, buffer, size)
 
