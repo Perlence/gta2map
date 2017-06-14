@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from ctypes import windll, byref, create_string_buffer, c_ulong
-from os.path import basename
-from struct import unpack, calcsize
+from os import path
+from struct import unpack
 
 import attr
 import pyglet
@@ -29,16 +29,15 @@ class App:
     process_handle = attr.ib()
 
     window = attr.ib(init=False, repr=False)
+    map_name = attr.ib(init=False, repr=False)
     map_sprite = attr.ib(init=False, repr=False)
     player_sprite = attr.ib(init=False, repr=False)
     target_sprites = attr.ib(init=False, repr=False)
 
-    def __attrs_post_init__(self):
-        self.window = pyglet.window.Window(768, 768)
+    WINDOW_SIZE = 768, 768
 
-        map_image = pyglet.image.load('./gfx/res-6p.jpg')
-        self.map_sprite = pyglet.sprite.Sprite(map_image)
-        self.map_sprite.scale = 768 / map_image.width
+    def __attrs_post_init__(self):
+        self.window = pyglet.window.Window(*self.WINDOW_SIZE)
 
         pin_image = pyglet.image.load('./gfx/pin.png')
         pin_image.anchor_x = pin_image.width // 2
@@ -62,11 +61,28 @@ class App:
             target_sprite.draw()
 
     def on_update(self, dt):
+        self.load_map()
+        self.update_player()
+        self.update_targets()
+
+    def load_map(self):
+        map_name = get_current_map_name(self.process_handle)
+        if self.map_name == map_name:
+            return
+        base_map_name, _ = path.splitext(map_name)
+        map_image = pyglet.image.load(path.join('gfx', base_map_name + '.jpg'))
+        self.map_sprite = pyglet.sprite.Sprite(map_image)
+        self.map_sprite.scale = self.window.width / map_image.width
+        self.map_name = map_name
+
+    def update_player(self):
         max_coordinate = 1 << 22
         real_x, real_y = get_coordinates(self.process_handle)
         self.player_sprite.x = real_x * self.map_sprite.width / max_coordinate
         self.player_sprite.y = self.map_sprite.height - real_y * self.map_sprite.height / max_coordinate
 
+    def update_targets(self):
+        max_coordinate = 1 << 22
         for target_sprite in self.target_sprites:
             target_sprite.visible = False
         for target_sprite, (real_x, real_y) in zip(self.target_sprites, get_target_coordinates(self.process_handle)):
@@ -81,6 +97,12 @@ def open_process(pid):
     handle = win32api.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
     yield handle
     handle.close()
+
+
+def get_current_map_name(process_handle):
+    gmp_addr = 0x5ec075
+    (name,) = unpack('32s', read_process_bytes(process_handle, gmp_addr, size=32))
+    return name.decode('ascii')
 
 
 def get_coordinates(process_handle):
@@ -107,11 +129,10 @@ def get_target_coordinates(process_handle):
         yield x_pos, y_pos
 
 
-def read_process_bytes(process_handle, address, *offsets, fmt='I'):
+def read_process_bytes(process_handle, address, *offsets, size=4):
     if isinstance(address, tuple):
         address = get_module_offset(process_handle, *address)
 
-    size = calcsize(fmt)
     buffer = create_string_buffer(size)
 
     bs, _ = read_process_memory(process_handle, address, buffer, size)
@@ -131,7 +152,7 @@ def get_module_offset(process_handle, module_name, offset):
 def get_module_handle(process_handle, module_name):
     for hmod in win32process.EnumProcessModules(process_handle):
         module_full_name = win32process.GetModuleFileNameEx(process_handle, hmod)
-        if basename(module_full_name) == module_name:
+        if path.basename(module_full_name) == module_name:
             return hmod
 
 
