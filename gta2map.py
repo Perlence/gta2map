@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from ctypes import windll, byref, create_string_buffer, c_ulong
 from os import path
-from struct import unpack
+from struct import unpack, calcsize
 
 import attr
 import pyglet
@@ -101,15 +101,15 @@ def open_process(pid):
 
 def get_current_map_name(process_handle):
     gmp_addr = 0x5ec075
-    (name,) = unpack('32s', read_process_bytes(process_handle, gmp_addr, size=32))
+    (name,) = read_process_memory(process_handle, gmp_addr, fmt='32s')
     return name.decode('ascii')
 
 
 def get_coordinates(process_handle):
     x_pos_addr = 0x5de030
     y_pos_addr = 0x5de034
-    (x_pos,) = unpack('<I', read_process_bytes(process_handle, x_pos_addr))
-    (y_pos,) = unpack('<I', read_process_bytes(process_handle, y_pos_addr))
+    (x_pos,) = read_process_memory(process_handle, x_pos_addr)
+    (y_pos,) = read_process_memory(process_handle, y_pos_addr)
     return x_pos, y_pos
 
 
@@ -120,28 +120,28 @@ def get_target_coordinates(process_handle):
         is_target_visible_offsets = (0x12cc, 0x1290, target_offset + 0x10)
         x_pos_offsets = (0x12cc, 0x1290, target_offset + 0x14)
         y_pos_offsets = (0x12cc, 0x1290, target_offset + 0x18)
-        (is_target_visible,) = unpack('<I', read_process_bytes(process_handle, base_address,
-                                      *is_target_visible_offsets))
+        (is_target_visible,) = read_process_memory(process_handle, base_address, *is_target_visible_offsets)
         if not is_target_visible:
             continue
-        (x_pos,) = unpack('<I', read_process_bytes(process_handle, base_address, *x_pos_offsets))
-        (y_pos,) = unpack('<I', read_process_bytes(process_handle, base_address, *y_pos_offsets))
+        (x_pos,) = read_process_memory(process_handle, base_address, *x_pos_offsets)
+        (y_pos,) = read_process_memory(process_handle, base_address, *y_pos_offsets)
         yield x_pos, y_pos
 
 
-def read_process_bytes(process_handle, address, *offsets, size=4):
+def read_process_memory(process_handle, address, *offsets, fmt='<I'):
     if isinstance(address, tuple):
         address = get_module_offset(process_handle, *address)
 
+    size = calcsize(fmt)
     buffer = create_string_buffer(size)
 
-    bs, _ = read_process_memory(process_handle, address, buffer, size)
+    bs, _ = _read_process_memory(process_handle, address, buffer, size)
     for offset in offsets:
         (address,) = unpack('<I', bs)
         address += offset
-        bs, _ = read_process_memory(process_handle, address, buffer, size)
+        bs, _ = _read_process_memory(process_handle, address, buffer, size)
 
-    return bs
+    return unpack(fmt, bs)
 
 
 def get_module_offset(process_handle, module_name, offset):
@@ -156,7 +156,7 @@ def get_module_handle(process_handle, module_name):
             return hmod
 
 
-def read_process_memory(process_handle, address, buffer, buffer_size):
+def _read_process_memory(process_handle, address, buffer, buffer_size):
     bytes_read = c_ulong(0)
     ReadProcessMemory = windll.kernel32.ReadProcessMemory
     ok = ReadProcessMemory(process_handle.handle, address, buffer, buffer_size, byref(bytes_read))
